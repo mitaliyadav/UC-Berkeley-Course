@@ -1,0 +1,54 @@
+---
+title: "Final Project"
+output: pdf_document
+author: "Mitali Yadav (3034158469)"
+---
+
+```{r}
+library("spls")
+library("plsr")
+library("tidyverse")
+library("caret")
+library("glmnet")
+library("rpart")
+library("rpart.plot")
+library("ipred")
+library("randomForest")
+library("stats")
+library("stargazer")
+library("moderndive")
+library("readxl")
+```
+
+
+```{r}
+#importing the train and test dataset
+train_set = read_csv('train.csv')
+test_set = read.csv('test.csv')
+
+head(train_set)
+head(test_set)
+names(train_set)
+```
+## EDA
+
+1. Starting with changing the target variable'\
+If Severity <2 => 1\
+Else Severity => 0\
+```{r}
+train_set['Y'] = as.integer(train_set$Severity > 2)
+names(train_set)
+dim(train_set)
+```
+```{r}
+#getting number of nulls in each column
+na_count = sapply(train_set, function(x) { round(length(which(is.na(x)))/nrow(train_set),3)})
+na_count_df = data.frame(na_count)
+na_count_df
+```
+```{r}
+#column- diff in lat and long
+#columns with <60% data missing should be eliminated?
+
+```
+

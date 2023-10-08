@@ -1,0 +1,45 @@
+---
+title: "R Notebook"
+output: htmlpdf_document
+author: "Mitali Yadav (3034158469)"
+---
+
+```{r,eval=FALSE}
+#importing any packages
+
+```
+
+
+```{r}
+library("fda.usc")
+library("pls")
+library("ggplot2")
+library(glmnet)
+library("plsr")
+library("spls")
+library("tidyverse")
+library("caret")
+library(ROCR)
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+

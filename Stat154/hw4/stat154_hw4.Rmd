@@ -1,0 +1,684 @@
+---
+title: "Stat 154 HW4"
+output: pdf_document
+author: "Mitali Yadav (3034158469)"
+---
+
+
+```{r, eval=FALSE}
+install.packages("rpart")
+install.packages("rpart.plot")
+install.packages("ipred")
+install.packages("randomForest")
+install.packages("stats")
+```
+
+
+```{r}
+library("spls")
+library("plsr")
+library("tidyverse")
+library("caret")
+library("glmnet")
+library("rpart")
+library("rpart.plot")
+library("ipred")
+library("randomForest")
+library("stats")
+```
+# Q1
+```{r}
+sp500 = read.csv("bf4024f5c75fc062.csv", header = T)
+sp_vals = read.csv("sp500Data.csv") 
+head(sp500)
+
+sp500redc = sp500[,c(2,3,7)]
+
+```
+
+```{r}
+#merging the 2 datasets
+mega_data = merge(x=sp500redc, y=sp_vals, by.x = "date", by.y = "Calendar.Date", all = FALSE, sort = TRUE)
+
+#number of unique values in date column
+uniq_date = unique(mega_data$date)
+```
+
+
+```{r}
+sp500_unstack = unstack(mega_data, PRC~TICKER,)
+
+sp500_matrix = matrix(sp500_unstack)
+
+myMatrix<-matrix(sp500_unstack[[1]],nrow=1342)
+vecNames<-names(sp500_unstack[1])
+for(k in 2:530){
+  if (length(sp500_unstack[[k]])==1342){
+    myMatrix<-cbind(myMatrix,sp500_unstack[[k]])
+    vecNames<-cbind(vecNames,names(sp500_unstack[k]))
+  }
+}
+
+my_df = as.data.frame(myMatrix, row.names = vecNames)
+names(my_df) = vecNames
+my_df["date"] = uniq_date
+
+#merging with sp_vals to get the corresponding sp.index values
+my_df = merge(x=my_df, y=sp_vals, by.x = "date", by.y = "Calendar.Date", all=FALSE, suffixes = c("","_2"))
+```
+
+## 1 
+
+Creating a sparse portfolio that replicates the SP500 index.
+```{r}
+set.seed(100)
+
+#splitting data randomly into train and test set
+
+
+#pre-processing the data 
+x_data = as.matrix(my_df[,-c(1,455)])
+
+#finding the best value of lambda for LASSO regression
+lambdas = 10^seq(2,-3, by=-0.1)
+
+l1_m_temp = cv.glmnet(x=x_data, y=my_df$SP.500.Level, alpha=1, lambda = lambdas)
+
+optimal_lambda_lasso = l1_m_temp$lambda.min
+optimal_lambda_lasso
+
+#building the model using the optimal value of lambda
+l1_model = glmnet(x_data, my_df$SP.500.Level, alpha=1, lambda = optimal_lambda_lasso)
+
+round(l1_model$beta,2)
+```
+```{r}
+plot(l1_model$beta)
+```
+
+Here, we have chosen to use the L-1 norm with regression because lasso regression model's loss function is modified to minimize the complexity of the model by putting a restriction on the the sum of the absolute values of the model coefficients.\
+Since we do not have a test set to test our model on, we cannot evaluate the model quantitatively.\
+However, one good indicator of how well our model can approximate the 
+SP500 index is the number of predictors that have a coefficient of 0 or close to zero.In the plot above, we can see that majority of the coefficients are near or at 0.\
+Another way to judge the quality of the model would be to calculate the mse (mean squared error).\
+
+## 2
+
+Building a sparse linear model for the first 60 days
+```{r}
+#creating the dataset for first 60 days
+f60_df = as.data.frame(my_df[1:60,])
+xdata_f60 = as.matrix(f60_df[,-c(1,455)])
+
+l1_f60_m = cv.glmnet(xdata_f60, y=f60_df$SP.500.Level, alpha = 1, lambda = lambdas)
+optimal_lambda_f60 = l1_f60_m$lambda.min
+optimal_lambda_f60
+
+#building the model using the optimal value of lambda
+l1_f60 = glmnet(xdata_f60, f60_df$SP.500.Level, alpha=1, lambda = optimal_lambda_f60)
+
+round(l1_f60$beta,2)
+
+```
+
+Building a sparse linear model for the last 60 days
+```{r}
+
+l60_df = as.data.frame(my_df[1283:1342,])
+dim(l60_df)
+xdata_l60 = as.matrix(l60_df[,-c(1,455)])
+
+l1_l60_m = cv.glmnet(xdata_l60, y=l60_df$SP.500.Level, alpha = 1, lambda = lambdas)
+optimal_lambda_l60 = l1_l60_m$lambda.min
+optimal_lambda_l60
+
+#building the model using the optimal value of lambda
+l1_l60 = glmnet(xdata_l60, l60_df$SP.500.Level, alpha=1, lambda = optimal_lambda_l60)
+
+round(l1_l60$beta,2)
+```
+
+To check the stability of the portfolios, we will compare the coefficients of the 2 models to see the similarities or differences in the coefficients.
+```{r}
+v1 = round(l1_f60$beta,4)
+v2 = round(l1_l60$beta,4)
+v1-v2
+
+
+```
+
+Based on v1, v2 and v1-v2 we can see that there is a drastic difference in the 2 model coefficients and for those which are closer to one another, the values are close to zero hence the small difference.\
+Thus the portfolios are not stable.\
+In order to ensure that the portfolio changes little over time, we need to add penalties. One such penalty could be the addition of a penalty that is proportional to the sum of the absolute values of the portfolio weights. This would encourage sparse portfolios.\
+Another penalty to add would be the mean tracking error. 
+$mean\_tracking\_error = Expected\_return - (Risk\_Tolerance *Variance)$
+
+## 3
+In case of the optimization problem, assuming we have N number of companies/securities to invest in.\
+w1,w2....wN are the weights of the securitites\
+$\mu$ is expected return 
+We can express portfolio return $\mu_p$ and risk $\sigma_p(w)$ as:\
+$\mu_p(w) = w^T \mu$ \
+$\sigma(w) = sqrt(w^T Vw)$ \
+
+If we cannot perform 'shorting' there is an additional constraint of non-negative values: \
+$x_i >= 0\ \forall\  i = 1,2,3...N\ or\ x >= 0$ \
+if $r_i$ is the expected return on a stock i\
+then the final optimization problem is 
+
+$\sum_{i = 1}^{n} r_i*x_i\ \geq\ r_{min}$ where $r_{min}$ is the minimum expected return.\
+
+## 4
+
+Now we create a new column called Returns to add to the sp500 dataset
+```{r}
+#adding the column 
+my_df$Returns = ave(my_df$SP.500.Level, FUN = function(x) c(0, diff(x)))
+my_df$Returns
+```
+
+
+```{r}
+set.seed(100)
+names(my_df)
+
+#pre-processing the data 
+x2_data = as.matrix(my_df[,-c(1,455, 456)])
+
+#finding the best value of lambda for LASSO regression
+lambdas = 10^seq(2,-3, by=-0.1)
+
+l1_m_temp2 = cv.glmnet(x=x2_data, y=my_df$Returns, alpha=1, lambda = lambdas)
+
+optimal_lambda_lasso2 = l1_m_temp2$lambda.min
+optimal_lambda_lasso2
+
+#building the model using the optimal value of lambda
+l1_model2 = glmnet(x2_data, my_df$Returns, alpha=1, lambda = optimal_lambda_lasso2)
+
+round(l1_model2$beta,2)
+
+plot(l1_model2$beta)
+```
+Comparing this plot to the plot created by the coefficients of the model with target variable SP500 index, here, we can see a straight black line at 0, indicating that a large number of values are 0 and the model is more sparse.\
+
+
+
+```{r}
+#creating the dataset for first 60 days
+f60_df2 = as.data.frame(my_df[1:60,])
+xdata2_f60 = as.matrix(f60_df2[,-c(1,455,456)])
+
+l1_f60_m2 = cv.glmnet(xdata2_f60, y=f60_df2$Returns, alpha = 1, lambda = lambdas)
+optimal_lambda2_f60 = l1_f60_m2$lambda.min
+optimal_lambda2_f60
+
+#building the model using the optimal value of lambda
+l12_f60 = glmnet(xdata2_f60, f60_df2$Returns, alpha=1, lambda = optimal_lambda2_f60)
+round(l12_f60$beta,3)
+
+plot(l12_f60$beta)
+```
+
+
+
+```{r}
+#Building a sparse linear model for the last 60 days
+l60_df2 = as.data.frame(my_df[1283:1342,])
+dim(l60_df2)
+xdata2_l60 = as.matrix(l60_df2[,-c(1,455,456)])
+
+l1_l60_m2 = cv.glmnet(xdata2_l60, y=l60_df2$Returns, alpha = 1, lambda = lambdas)
+optimal_lambda2_l60 = l1_l60_m2$lambda.min
+optimal_lambda2_l60
+
+#building the model using the optimal value of lambda
+l12_l60 = glmnet(xdata2_l60, l60_df2$Returns, alpha=1, lambda = optimal_lambda2_l60)
+
+round(l12_l60$beta, 3)
+
+plot(l12_l60$beta)
+```
+
+In both the above plots which were created similar to part 2 of this question, we see a straight black line at 0 indicating that both these models are even more sparse than the ones we built in part 2. We shall now use them to check the stability of the portfolio.
+```{r}
+v1new = round(l12_f60$beta,4)
+v2new = round(l12_l60$beta,4)
+v1new - v2new
+
+plot(v1new - v2new)
+```
+
+Here, we can see that the plot does have a black straight line indicating a large number of differences are 0 but this could also be due to the fact that the weights for those corresponding predictors was 0 to begin with. As for the non-zero points, there are quite a few of those, which could mean that the portfolio is sparse but it is still not stable.\
+
+The potfolio will not be stable.\
+Although the matrix changes, value of the returns will have a very short range so it would be different from the previous model.\
+For part 1. the model would be more sparse because values are a lot closer to each other and it is harder to differentiate. \
+For part 2. the model would be just as unstable as the previous one even though the values have changed. 
+
+## 5
+
+
+```{r}
+set.seed(100)
+
+#pre-processing the data 
+x_data = as.matrix(my_df[,-c(1,455,456)])
+
+#finding the best value of lambda for LASSO regression
+lambdas = 10^seq(2,-3, by=-0.1)
+
+l2_m_temp = cv.glmnet(x=x_data, y=my_df$SP.500.Level, alpha=0, lambda = lambdas)
+
+optimal_lambda_ridge = l2_m_temp$lambda.min
+optimal_lambda_ridge
+
+#building the model using the optimal value of lambda
+l2_model = glmnet(x_data, my_df$SP.500.Level, alpha=0, lambda = optimal_lambda_ridge)
+#
+
+round(l2_model$beta,2)
+
+plot(l2_model$beta)
+```
+Since transaction costs are no longer a concern, I would suggest using L2 norm regression to track the sp500 index. Like L1-norm, Ridge regression is also used to reduce overfitting to the data but additionally. Additionally, L2 norm does not equate the coeff of the less relevant predictors to 0, thus it could potentially increase the tracking accuracy of the model.\
+
+
+Since we do not have a test set to test our model on, we cannot evaluate the model quantitatively.\
+However, one good indicator of how well our model can approximate the 
+SP500 index is the number of predictors that have a coefficient of 0 or close to zero.In the plot above, we can see that majority of the coefficients are near or at 0.\
+Another way to judge the quality of the model would be to calculate the mse (mean squared error).\
+
+# Q2
+
+
+## a
+
+```{r}
+data("prostate")
+
+x_pros = prostate$x
+y_pros = prostate$y
+dim(x_pros)
+length(y_pros)
+```
+```{r}
+#splitting into training and testing
+set.seed(18)
+train_pros_idx = sample(seq_len(nrow(prostate$x)), size = 85)
+
+pros_trainX = prostate$x[train_pros_idx,]
+pros_testX = prostate$x[-train_pros_idx,]
+
+pros_trainY = prostate$y[train_pros_idx]
+pros_testY = prostate$y[-train_pros_idx]
+
+
+train_cmb = cbind(pros_trainX, pros_trainY)
+train_cmb = as.data.frame(train_cmb)
+names(train_cmb)[6034] <- "Y"
+train_cmb[1:4,6020:6034]
+```
+
+```{r}
+rpartModel_pros<-rpart(Y~.,data=train_cmb, method = "anova", control = list(cp = 0.001, xval = 10))
+#plot(rpartModel_pros)
+#text(rpartModel_pros,pretty=TRUE,family="Helvetica")
+
+opar <- par() # to reset later
+par(xpd=TRUE)
+plot(rpartModel_pros)
+text(rpartModel_pros, use.n = T)
+par <- opar # restore old setting
+
+print(rpartModel_pros)
+```
+
+```{r}
+pros_testX1 = as.data.frame(pros_testX)
+pros_predict<-predict(rpartModel_pros,newdata=pros_testX1)
+pros_threshold=.8
+
+is_pros<-(pros_predict>pros_threshold)
+
+actual_pros<-pros_testY
+
+matched<-(is_pros==actual_pros)
+length_Y<-length(actual_pros)
+
+misClassif<-1-sum(matched)/length_Y
+misClassif
+accuracy <- 1-misClassif
+accuracy
+```
+
+```{r}
+###Comparing this to other models that we have - sparse logistic regression
+#trying out the sparse model (without the lambda)
+slg_model_cv = cv.glmnet(pros_trainX, pros_trainY, family="binomial",alpha=1)
+
+
+#using this cross-validation to find the optimal lambda
+optimal_lambda_slgr = slg_model_cv$lambda.min
+optimal_lambda_slgr
+
+#using the optimal value of lambda to build the classifier
+slgr_model = glmnet(pros_trainX, pros_trainY, alpha = 1, family = "binomial",
+                lambda = optimal_lambda_slgr)
+
+#type="response" gives the probability
+yhat_slgr_prob = predict(slgr_model, newx = pros_testX, type="response")
+yhat_slgr = as.numeric((yhat_slgr_prob>0.5))
+yhat_slgr
+
+#testing the accuracy of the model by diving the number of correct predictions by number of rows
+corr_pred_slgr = sum(yhat_slgr == pros_testY)
+accuracy_slgr = corr_pred_slgr/length(pros_testY)
+accuracy_slgr
+```
+Based on the accuracy of the tree (~0.82) and sparse logistic regression (~0.94), we can say that the sparse logistic regression model does a better job at accurately predicting the Y values.
+
+
+## b.
+
+Using bagging to improve the results of CART trees
+```{r}
+set.seed(123)
+
+#train the bagged model
+pros_bag1 = bagging(formula = Y ~ ., data = train_cmb, nbagg = 40, coob = TRUE)
+
+pros_bag1
+bag_o_pred = predict(pros_bag1, pros_testX)
+bag_o_pred
+
+bag_threshold = 0.5
+
+bag_predictions = (bag_o_pred>bag_threshold)
+bag_actual = pros_testY
+accuracy_bagging = sum(bag_actual == bag_predictions)/length(bag_predictions)
+accuracy_bagging
+```
+Yes, there is notable improvement from the (0.82) to (0.88) compared to the CART results.
+
+
+## c.
+
+using random forests to analyze the dataset
+```{r}
+
+set.seed(71)
+#turning target variable into factor
+train_cmb$Y = as.factor(train_cmb$Y)
+pros_rf <-randomForest(Y ~.,data=train_cmb, ntree=500) 
+print(pros_rf)
+
+rf_pred = predict(pros_rf, pros_testX)
+rf_pred
+
+accuracy_rf = sum(rf_pred == pros_testY)/length(pros_testY)
+accuracy_rf
+```
+This has further improved the accuracy of the model. The accuracy has increased from (0.88) to (0.94)
+```{r}
+
+```
+
+
+# Q3
+
+## a.
+```{r, eval=FALSE}
+install.packages("FunChisq")
+install.packages("Metrics")
+```
+```{r}
+library(FunChisq)
+library(Metrics)
+```
+
+
+
+
+Creating the dataframe for linear regression
+3(1) + 5(1) 
+```{r}
+set.seed(124)
+col_a = seq(0,120,3)
+col_b = seq(0,160,4)
+col_c = seq(0,360,9)
+Y = col_a*3 - 2.7*col_b + 1.34*col_c + 9
+
+lreg_df = data.frame(col_a, col_b, col_c, Y)
+head(lreg_df)
+
+add.noise(lreg_df, 0.1, "house",0)
+
+train_pros_idx2 = sample(seq_len(nrow(lreg_df)), size = 30)
+
+lreg_trainX = lreg_df[train_pros_idx2,1:3]
+lreg_testX = lreg_df[-train_pros_idx2,1:3]
+
+lreg_trainY = lreg_df$Y[train_pros_idx2]
+lreg_testY = lreg_df$Y[-train_pros_idx2]
+
+
+train_cmb2 = cbind(lreg_trainX, lreg_trainY)
+train_cmb2 = as.data.frame(train_cmb2)
+train_cmb2
+```
+
+Fitting CART to this dataset
+```{r}
+rpartModel_lreg<-rpart(lreg_trainY~.,data=train_cmb2, method = "anova", control = list(cp = 0.001, xval = 10))
+#plot(rpartModel_pros)
+#text(rpartModel_pros,pretty=TRUE,family="Helvetica")
+
+opar <- par() # to reset later
+par(xpd=TRUE)
+plot(rpartModel_lreg)
+text(rpartModel_lreg, use.n = T)
+par <- opar # restore old setting
+
+print(rpartModel_lreg)
+
+lreg_pred = predict(rpartModel_lreg, newdata = as.data.frame(lreg_testX))
+```
+
+```{r}
+#building linear regression model for comparison
+lreg_model = lm(lreg_trainY ~., data = train_cmb2)
+
+lreg_model_pred = predict(lreg_model, newdata = as.data.frame(lreg_testX))
+lreg_model_pred
+```
+
+
+
+```{r}
+#using rmse to measure the accuracy of the 2 models
+
+rmse_cart = rmse(lreg_testY, lreg_pred)
+rmse_lreg = rmse(lreg_testY, lreg_model_pred)
+rmse_cart
+rmse_lreg
+```
+Since the values are not categorical, I have used root mean squared error as a measure of fit of the model and comparing the error of 65.64 (CART) to an error << 1 we can see that CART does not seem to do well with data that has an inherently linear relationship\
+One of the drawbacks is that the model is built based upon the sample without making any inference about the underlying probability distribution so it is not ideal to make any generalizations on the underlying phenomenon based on the results observed.\
+
+
+# Q4
+
+## CART
+```{r}
+
+v1 = seq(-149,150,3)
+length(v1)
+v2 = seq(-199,200,4)
+length(v2)
+
+v3 = seq(-449,450,9)
+length(v3)
+
+v4 = seq(-349,350,7)
+length(v4)
+
+v5 = seq(-249,250, 5)
+length(v5)
+
+Y = v1*3 - 2.7*v2 + 1.34*v3 -4.6*v4 + 0.9*v5 - 9.6
+
+#creating dataframe
+sample_df = data.frame(v1,v2,v3,v4,v5,Y)
+#adding noise to dataframe
+set.seed(9)
+sample_df$Y = round(jitter(sample_df$Y), 2)
+
+#fitting a cart tree to this dataset
+rpart_sample_df<-rpart(Y~.,data=sample_df, method = "anova", control = list(cp = 0.001))
+
+print(rpart_sample_df)
+plot(rpart_sample_df)
+text(rpart_sample_df, use.n = T, pretty = TRUE)
+```
+
+Adding 5 gaussian predictors to the dataset
+```{r}
+set.seed(56)
+for (idx in seq(1,5)) {
+  col_name = paste("v",idx+5, sep = "")
+  sample_df[col_name] = rnorm(100,0,1)
+}
+  
+#fitting a cart tree to this dataset
+rpart_sample_df5<-rpart(Y~.,data=sample_df, method = "anova", control = list(cp = 0.001))
+
+print(rpart_sample_df5)
+plot(rpart_sample_df5)
+text(rpart_sample_df5, use.n = T, pretty = TRUE)
+```
+
+Adding 10 independent predictors
+```{r}
+set.seed(56)
+for (idx in seq(1,10)) {
+  col_name = paste("v",idx+10, sep = "")
+  sample_df[col_name] = rnorm(100,0,1)
+}
+  
+#fitting a cart tree to this dataset
+rpart_sample_df10<-rpart(Y~.,data=sample_df, method = "anova", control = list(cp = 0.001))
+
+print(rpart_sample_df10)
+plot(rpart_sample_df10)
+text(rpart_sample_df10, use.n = T, pretty = TRUE)
+```
+
+Adding 30 independent predictors
+```{r}
+set.seed(56)
+sample_df
+for (idx in seq(1,30)) {
+  col_name = paste("v",idx+21, sep = "")
+  sample_df[col_name] = rnorm(100,0,1)
+}
+  
+#fitting a cart tree to this dataset
+rpart_sample_df30<-rpart(Y~.,data=sample_df, method = "anova", control = list(cp = 0.001))
+
+print(rpart_sample_df30)
+plot(rpart_sample_df30)
+text(rpart_sample_df30, use.n = T, pretty = TRUE)
+```
+
+Adding the independent predictors does not affect the tree. While we are not sure if it picks the "right" variables, it does pick the variables picked by the original tree and increasing the number of independent predictors does not change that. This tells us that CART is a useful technique to get a general idea of which columns have more influence on the target variables.
+
+
+## Random Forest
+```{r}
+#using the same dataset from earlier
+sample_df2 = sample_df[,c("v1","v2","v3","v4","v5", "Y")]
+
+
+#fitting a cart tree to this dataset
+set.seed(10)
+rf_sample_df<-randomForest(Y~.,data=sample_df2,ntree=400)
+
+print(rf_sample_df)
+```
+
+Adding 5 Gaussian predictors
+```{r}
+set.seed(10)
+for (idx in seq(1,5)) {
+  col_name = paste("v",idx+5, sep = "")
+  sample_df2[col_name] = rnorm(100,0,1)
+}
+
+#refitting the model
+rf_sample_df5 = randomForest(Y ~., data = sample_df2, ntree = 400)
+
+print(rf_sample_df5)
+```
+
+Adding 10 Gaussian Predictors
+```{r}
+set.seed(10)
+for (idx in seq(1,10)) {
+  col_name = paste("v",idx+10, sep = "")
+  sample_df2[col_name] = rnorm(100,0,1)
+}
+
+#refitting the model
+rf_sample_df10 = randomForest(Y ~., data = sample_df2, ntree = 400)
+
+print(rf_sample_df10)
+```
+
+Adding 30 Gaussian Predictors
+```{r}
+set.seed(10)
+for (idx in seq(1,30)) {
+  col_name = paste("v",idx+20, sep = "")
+  sample_df2[col_name] = rnorm(100,0,1)
+}
+
+#refitting the model
+rf_sample_df30 = randomForest(Y ~., data = sample_df2, ntree = 400)
+
+print(rf_sample_df30)
+```
+
+While CART was able to select the right predictors and did not use any of the Gaussian predictors, the random forest model did not do the same. This is shown by the exponential increase in mean squared residuals: The value grew from 190 to 333, to 565 and 963 as gaussian predictors were added to the model. 
+
+
+# Q5
+
+In the case of the CART model, the tree is built such that every leaf in the tree has constant regression.\
+This means that the dependent variable is constant in each leaf. \
+An alternative proposition is to apply piecewise linear function to each leaf in the tree (including the root.)\
+The algorithm is as follows:\
+Ncurr - current node being referred to\
+1. At the very beginning the root node is the Ncurr and since no split has taken place we use the full dataset. \
+2. On the entire dataset, we create a linear regression model at node Ncurr.\
+3. Calculate the R^2 of the linear model at Ncurr.\
+   3.1 If R^2  > pre-decided threshold theta, we can call it a leaf and move to step 5\
+   3.2 If not, continue to step 4\
+4. This is the repeating step where we must perform n random decisions and select the one with the highest possible R^2\
+   4.1 We start y randomly selecting an independent variable Xi and a random threshold theta(i)\
+   4.2 We split the dataset into Ncurr1, Ncurr2 based on the threshold Xi < theta(i)\
+   4.3 Next, we create a linear regression model on Ncurr1 and Ncurr2 and calculate their R^2s (r1 and r2) as well as the difference in the R^2 values (diff_r2)\
+   4.4 For the Ncurr node, we select the independent variable Xi and threshold theta(i) for which diff_r2 is maximum and Ncurr gives rise to 2 new subnodes.\
+5. At this point, we can say that Ncurr is a leaf (no more sub-nodes). So we travel back up the tree to see if there are any subnodes remaining to be processed and repeat step 2 onwards. If all the nodes have been process, we can end the algorithm.\
+
+
+Here, step 3 is becomes the exit condition, where we can end the algorithm if:\
+1. Ncurr's depth is greater than the max_depth of the tree\
+2. Ncurr's dataset is smaller than threshold for dataset size.\
+
+
+
+
+
+
+

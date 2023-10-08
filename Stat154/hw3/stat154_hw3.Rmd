@@ -1,0 +1,338 @@
+---
+title: "R Notebook"
+author: "Mitali Yadav (3034158469)"
+output: pdf_document
+---
+
+# Q4.
+
+```{r, eval=FALSE}
+install.packages("fda.usc")
+install.packages("pls")
+
+```
+
+
+
+```{r}
+library("fda.usc")
+library("pls")
+library("ggplot2")
+```
+
+
+
+```{r}
+#importing the CSV files (as an alternate method)
+X_data = read.csv("tecator_X.csv")
+Y_data = read.csv("tecator_Y.csv")
+
+#combining them using cbind into a matrix
+data = cbind(X_data, Y_data)
+data = as.data.frame(data)
+typeof(data)
+dim(data)
+
+#splitting into training and testing
+tec_train = data[1:172,]
+tec_test = data[173:215,]
+
+head(tec_train)
+```
+
+
+1. PC Regression
+
+```{r}
+#using the PLS package to perform pc regression
+set.seed(18)
+pcr_fit <- pcr(y ~., data= tec_train, scale=TRUE, validation="CV")
+
+summary(pcr_fit)
+
+validationplot(pcr_fit, val.type = "MSEP")
+
+#Number of components to be used should be 8 according to the validation plot
+#this has been calculated using the validation plot shown below as well as the variance explained by number of principal components
+
+```
+
+
+```{r}
+#root mean squared error 
+rmse = function(x,y) {sqrt(mean((x-y)^2))}
+
+#calcualte r^2
+ss_res = function(yi,y_hat) {sum((yi-y_hat) ^2)}
+ss_tot = function(yi) {sum((yi - mean(yi)) ^2)}
+r2 = function(ss_res, ss_tot) {1 - (ss_res/ss_tot)}
+rmseCV = RMSEP(pcr_fit, estimate ='CV'); 
+rmseCV 
+
+plot(rmseCV, main='Predicted RMSE by number of components', xlim=c(1,100),xlab = "number of components")
+```
+```{r}
+#predicting the values using 8 principal components
+yhat = predict(pcr_fit, tec_test, ncomp=8)
+
+# calculating the mse
+mse_pred <- rmse(tec_test$y, yhat)^2
+ss_res_pcr = ss_res(tec_test$y, yhat)
+ss_tot_pcr = ss_tot(yhat)
+r2_pcr = r2(ss_res_pcr, ss_tot_pcr)
+r2_pcr
+rmse(tec_test$y, yhat)
+
+```
+
+2. Ridge Regression
+
+```{r, eval=FALSE}
+#installing the packages
+install.packages("glmnet")
+```
+```{r}
+library(glmnet)
+```
+
+
+```{r}
+#using the pre-split data from training and testing tec_train and tec_test
+train_X = tec_train[,1:100]
+test_X = tec_test[,1:100]
+#scaling training and testing X
+train_X = scale(train_X, center = T, scale = T)
+test_X = scale(test_X, center = T, scale = T)
+#convert into matrix 
+temp_train_X = as.matrix(train_X)
+temp_test_X = as.matrix(test_X)
+
+train_Y = tec_train[,101]
+test_Y = tec_test[,101]
+
+#fitting the ridge regression model
+lambdas = 10^seq(2, -3, by = -.1)
+ridge_reg = glmnet(temp_train_X, train_Y, nlambda = 25, alpha = 0, family = 'gaussian', lambda = lambdas)
+
+summary(ridge_reg)
+```
+
+
+```{r}
+#performing cross validation
+ridge_crossval <- cv.glmnet(temp_train_X, train_Y, alpha = 0, lambda = lambdas)
+
+#thus we used the functions provided by the glmnet package to figure out the most optimal lambda
+optimal_lambda <- ridge_crossval$lambda.min
+optimal_lambda
+```
+We were able to calculate the optimal lambda using cross-validation
+
+
+```{r}
+#use the optimal lambda to predict the y_fat values and calculate MSE
+rmse = function(x,y) {sqrt(mean((x-y)^2))}
+mse = function(x,y) {mean((x-y)^2)}
+
+
+y_hat_ridge = predict(ridge_reg, s = optimal_lambda, newx = temp_test_X)
+mse_pred_ridge = mse(y_hat_ridge, test_Y)
+
+ss_res_ridge = ss_res(test_Y, y_hat_ridge)
+ss_tot_ridge = ss_tot(y_hat_ridge)
+r2_ridge = r2(ss_res = ss_res_ridge,ss_tot = ss_tot_ridge)
+
+
+mse_pred_ridge
+r2_ridge
+```
+
+
+3. Lasso Regression
+
+```{r}
+lambdas <- 10^seq(2, -3, by = -.1)
+
+#alpha=1 for lasso regression
+lasso_reg = cv.glmnet(temp_train_X, train_Y, alpha =1, lambda = lambdas, standardize=T)
+
+optimal_lambda_lasso = lasso_reg$lambda.min
+optimal_lambda_lasso
+```
+
+```{r}
+#using the optimal lambda to predict the values of y_fat
+y_hat_lasso = predict(lasso_reg, s = optimal_lambda_lasso, newx = temp_test_X)
+
+#calculating the r2 for this method
+ss_res_lasso = ss_res(test_Y, y_hat_lasso)
+ss_tot_lasso = ss_tot(y_hat_lasso)
+r2_lasso = r2(ss_res = ss_res_lasso,ss_tot = ss_tot_lasso)
+
+#mean squared error being calcualted over the testing dataset
+mse_pred_lasso = mse(y_hat_lasso, test_Y)
+mse_pred_lasso
+r2_lasso
+```
+
+The best method so far has been the PCA Regression technique that had the lowest value of mean squared error on the same testing dataset. 
+
+
+
+
+# Q5.
+```{r,eval=FALSE}
+install.packages("plsr")
+install.packages("faraway")
+install.packages("spls")
+install.packages("caret")
+```
+
+```{r}
+library("plsr")
+library("spls")
+library("tidyverse")
+library("caret")
+```
+```{r}
+#load the prostate dataset
+data("prostate")
+X = prostate$x
+prostate$x[1:5,1:5]
+prostate$y[1:45]
+
+#preparing the data
+prostate = na.omit(prostate)
+set.seed(18)
+train_pros_idx = sample(seq_len(nrow(prostate$x)), size = 70)
+train_pros_idx
+pros_trainX = prostate$x[train_pros_idx,]
+pros_testX = prostate$x[-train_pros_idx,]
+
+pros_trainY = prostate$y[train_pros_idx]
+pros_testY = prostate$y[-train_pros_idx]
+
+```
+
+```{r}
+#trying out the sparse model (without the lambda)
+slg_model_cv = cv.glmnet(pros_trainX, pros_trainY, family="binomial",alpha=1)
+
+
+#using this cross-validation to find the optimal lambda
+optimal_lambda_slgr = slg_model_cv$lambda.min
+optimal_lambda_slgr
+
+#using the optimal value of lambda to build the classifier
+slgr_model = glmnet(pros_trainX, pros_trainY, alpha = 1, family = "binomial",
+                lambda = optimal_lambda_slgr)
+```
+
+Now that we have built the model, we can use it to predict the values for the test set as well as the training set
+
+```{r}
+#coef(slgr_model)
+
+#type="response" gives the probability
+yhat_slgr_prob = predict(slgr_model, newx = pros_testX, type="response")
+yhat_slgr = as.numeric((yhat_slgr_prob>0.5))
+yhat_slgr
+
+#testing the accuracy of the model by diving the number of correct predictions by number of rows
+corr_pred_slgr = sum(yhat_slgr == pros_testY)
+corr_pred_slgr/32
+```
+
+
+
+
+
+
+
+Part2. Building another classifier - Logistic Regression Model with L2 regularization
+
+
+```{r}
+#using the same dataset and partitions created for the sparse logistic regression and use for ridge regression
+lg_model_cv = cv.glmnet(pros_trainX, pros_trainY, family="binomial", alpha=0)
+
+#calculating optimal lambda
+optimal_lambda_lgr = lg_model_cv$lambda.min
+optimal_lambda_lgr
+
+#building the classifier with the optimal lambda
+lgr_model = glmnet(pros_trainX, pros_trainY, alpha = 0, family = "binomial",
+                lambda = optimal_lambda_lgr)
+
+
+```
+
+
+```{r}
+#predicting values using this model
+yhat_lgr_prob = predict(lgr_model, newx = pros_testX, type="response")
+yhat_lgr = as.numeric((yhat_lgr_prob > 0.5))
+yhat_lgr
+
+#testing the accuracy of this model
+corr_pred_lgr = sum(yhat_lgr == pros_testY)
+corr_pred_lgr/32
+```
+
+
+
+
+Comparing the 2 models 
+We can say that based on the accuracy of the 2 models, the SLR with L1 regularization is more accurate. However, we can take a look at the ROC curve to further understand which model has a more accurate prediction.
+
+```{r,eval=FALSE}
+install.packages("ROCR")
+```
+```{r}
+library(ROCR)
+```
+```{r}
+thesePredictions<-yhat_slgr_prob
+theseLabels<-pros_testY
+
+pred <- prediction(thesePredictions, theseLabels)
+perf <- performance(pred,"tpr","fpr")
+plot(perf,colorize=TRUE, main="ROC curve for Spare Logit with Lasso Regression", xlab="False Positive Rate", ylab="True Positive Rate")
+
+
+#doing the same for L2
+thesePredictions2<-yhat_lgr_prob
+theseLabels2<-pros_testY
+
+pred2 <- prediction(thesePredictions2, theseLabels2)
+perf2 <- performance(pred2,"tpr","fpr")
+plot(perf2,colorize=TRUE, main="ROC curve for Spare Logit with Ridge Regression", xlab="False Positive Rate", ylab="True Positive Rate")
+
+
+```
+Also plotting the Precision vs. recall curves for both regressions
+```{r}
+perfPR <- performance(pred, "prec", "rec")
+plot(perfPR,colorize=TRUE,main="Precision-Recall curve for Spare Logit with Lasso Regression", xlab="Recall", ylab="Precision")
+
+
+#for l2
+perfPR2 <- performance(pred2, "prec", "rec")
+plot(perfPR2,colorize=TRUE,main="Precision-Recall curve for Spare Logit with Ridge Regression", xlab="Recall", ylab="Precision")
+```
+
+Based on both, the ROC curve and the precision-recall curve, we can confirm that the Lasso Regularization yields more accurate results compared to Ridge Regularization. In the ridge, the coefficients of the linear transformation are normal distributed and in the lasso they are Laplace distributed. In the lasso, this makes it easier for the coefficients to be zero and therefore easier to eliminate some of your input variable as not contributing to the output. Since we are using all the variables, this makes the model extremely specific and reduces the ability of the model to accurately predict on an unknown dataset. It increases variance and bias. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+

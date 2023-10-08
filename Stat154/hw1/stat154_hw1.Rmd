@@ -1,0 +1,10 @@
+---
+title: "Stat154 hw1"
+output: pdf_document
+author : "Mitali Yadav"
+---
+
+```{r}
+#importing the dataset 
+
+```
